@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "pvp-stats",
+  "version": "${version}",
+  "name": "PvP Stats",
+  "description": "PVP 组别战绩统计：创建 PVP 组、可点击的邀请/结束请求、K/D 计分板、自动结束与战报日志",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.ethan.pvpstats.PvPStatsMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.7",
+    "java": ">=21",
+    "fabric-api": "*"
+  },
+  "license": "MIT"
+}
