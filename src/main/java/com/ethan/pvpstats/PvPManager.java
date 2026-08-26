@@ -296,9 +296,16 @@ public class PvPManager {
         String victimName = victim.getName().getString();
 
         UUID attackerUuid = resolveAttacker(server, victim, source);
+        // “在与 xxx 的战斗中死亡”（火焰/摔落等持续伤害）：伤害源无攻击者时，归属最近攻击者
+        if (attackerUuid == null && victim.getPrimeAdversary() instanceof ServerPlayerEntity prime) {
+            attackerUuid = prime.getUuid();
+        }
         boolean explosionKill = attackerUuid != null
                 && !(source.getAttacker() instanceof ServerPlayerEntity)
                 && isExplosionLike(source);
+        boolean combatKill = attackerUuid != null
+                && !(source.getAttacker() instanceof ServerPlayerEntity)
+                && !explosionKill;
 
         // 任何原因的死亡都计入死亡数
         group.statsOf(victim.getUuid(), victimName).deaths++;
@@ -307,8 +314,9 @@ public class PvPManager {
                 && groupName.equals(MEMBERSHIP.get(attackerUuid))) {
             group.getStats(attackerUuid).kills++;
             group.addKill(attackerUuid, victim.getUuid());
-            group.logDeath(time, victimName + " 被 " + group.nameOf(attackerUuid)
-                    + " 击杀" + (explosionKill ? "（爆炸）" : ""));
+            String suffix = explosionKill ? "（爆炸）" : combatKill ? "（战斗中）" : "";
+            group.logDeath(time, victimName + " 被 " + group.nameOf(attackerUuid) + " 击杀" + suffix
+                    + (combatKill ? "：" + source.getDeathMessage(victim).getString() : ""));
         } else {
             group.logDeath(time, victimName + " 死亡：" + source.getDeathMessage(victim).getString());
         }
