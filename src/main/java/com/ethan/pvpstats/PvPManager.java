@@ -3,17 +3,24 @@ package com.ethan.pvpstats;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.minecraft.block.BedBlock;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.RespawnAnchorBlock;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.damage.DamageSource;
+import net.minecraft.entity.damage.DamageTypes;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.ClickEvent;
 import net.minecraft.text.HoverEvent;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
+import net.minecraft.util.ActionResult;
 import net.minecraft.util.Formatting;
 
 import java.io.IOException;
@@ -48,6 +55,17 @@ public class PvPManager {
         ServerLivingEntityEvents.AFTER_DEATH.register(PvPManager::afterDeath);
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> onJoin(handler.player, server));
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> onDisconnect(handler.player, server));
+        // 玩家右键床/重生锚时登记"引爆预备"，供爆炸归属追踪
+        UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
+            if (player instanceof ServerPlayerEntity serverPlayer && world instanceof ServerWorld serverWorld) {
+                BlockState state = serverWorld.getBlockState(hitResult.getBlockPos());
+                if (state.getBlock() instanceof BedBlock || state.getBlock() instanceof RespawnAnchorBlock) {
+                    ExplosionTracker.recordPrime(serverPlayer.getUuid(),
+                            hitResult.getBlockPos().toCenterPos(), serverWorld.getServer().getTicks());
+                }
+            }
+            return ActionResult.PASS;
+        });
     }
 
     public static Collection<String> groupNames() {
@@ -230,28 +248,37 @@ public class PvPManager {
 
     // ---------------------------------------------------------------- 事件处理
 
-    /** 伤害限制：组内成员只能攻击同组成员，组外玩家无法攻击组内成员 */
+    /** 伤害限制：组内成员只能攻击同组成员，组外玩家无法攻击组内成员（含水晶/重生锚/床爆炸） */
     private static boolean allowDamage(LivingEntity entity, DamageSource source, float amount) {
         if (!(entity instanceof ServerPlayerEntity victim)) {
             return true;
         }
-        Entity attacker = source.getAttacker();
-        if (!(attacker instanceof ServerPlayerEntity attackerPlayer) || attackerPlayer == victim) {
+        MinecraftServer server = victim.getServer();
+        if (server == null) {
             return true;
         }
+        UUID attackerUuid = resolveAttacker(server, victim, source);
+        if (attackerUuid == null || attackerUuid.equals(victim.getUuid())) {
+            return true;
+        }
+        ServerPlayerEntity attackerPlayer = server.getPlayerManager().getPlayer(attackerUuid);
         String victimGroup = MEMBERSHIP.get(victim.getUuid());
-        String attackerGroup = MEMBERSHIP.get(attackerPlayer.getUuid());
+        String attackerGroup = MEMBERSHIP.get(attackerUuid);
         if (victimGroup == null && attackerGroup == null) {
             return true; // 双方都不在任何 PVP 组别，保持原版行为
         }
         boolean allowed = victimGroup != null && victimGroup.equals(attackerGroup);
-        if (!allowed) {
+        if (!allowed && attackerPlayer != null) {
             attackerPlayer.sendMessage(Text.literal("[PVP] 你只能攻击与你在同一 PVP 组别的玩家").formatted(Formatting.RED), true);
         }
         return allowed;
     }
 
-    /** 死亡统计：同组击杀计入 K/D；组内玩家的所有死亡都会记入战报 */
+    /**
+     * 死亡统计：
+     * 组内玩家的任何死亡都计入自己的死亡数；
+     * 击杀方为同组玩家时（含水晶/重生锚/床爆炸归属）计入击杀数与两两击杀明细。
+     */
     private static void afterDeath(LivingEntity entity, DamageSource source) {
         if (!(entity instanceof ServerPlayerEntity victim)) {
             return;
@@ -266,17 +293,43 @@ public class PvPManager {
             return;
         }
         String time = new SimpleDateFormat("HH:mm:ss").format(new Date());
-        Entity attacker = source.getAttacker();
-        if (attacker instanceof ServerPlayerEntity killer && killer != victim
-                && groupName.equals(MEMBERSHIP.get(killer.getUuid()))) {
-            group.statsOf(killer.getUuid(), killer.getName().getString()).kills++;
-            group.statsOf(victim.getUuid(), victim.getName().getString()).deaths++;
-            group.addKill(killer.getUuid(), victim.getUuid());
-            group.logDeath(time, victim.getName().getString() + " 被 " + killer.getName().getString() + " 击杀");
-            ScoreboardHud.refresh(server, group);
+        String victimName = victim.getName().getString();
+
+        UUID attackerUuid = resolveAttacker(server, victim, source);
+        boolean explosionKill = attackerUuid != null
+                && !(source.getAttacker() instanceof ServerPlayerEntity)
+                && isExplosionLike(source);
+
+        // 任何原因的死亡都计入死亡数
+        group.statsOf(victim.getUuid(), victimName).deaths++;
+
+        if (attackerUuid != null && !attackerUuid.equals(victim.getUuid())
+                && groupName.equals(MEMBERSHIP.get(attackerUuid))) {
+            group.getStats(attackerUuid).kills++;
+            group.addKill(attackerUuid, victim.getUuid());
+            group.logDeath(time, victimName + " 被 " + group.nameOf(attackerUuid)
+                    + " 击杀" + (explosionKill ? "（爆炸）" : ""));
         } else {
-            group.logDeath(time, victim.getName().getString() + " 死亡：" + source.getDeathMessage(victim).getString());
+            group.logDeath(time, victimName + " 死亡：" + source.getDeathMessage(victim).getString());
         }
+        ScoreboardHud.refresh(server, group);
+    }
+
+    /** 解析伤害来源的攻击玩家：直接攻击者，或爆炸类伤害的归属玩家 */
+    private static UUID resolveAttacker(MinecraftServer server, LivingEntity entity, DamageSource source) {
+        if (source.getAttacker() instanceof ServerPlayerEntity player) {
+            return player.getUuid();
+        }
+        if (isExplosionLike(source)) {
+            return ExplosionTracker.findAttacker(server.getTicks(), entity.getPos());
+        }
+        return null;
+    }
+
+    private static boolean isExplosionLike(DamageSource source) {
+        return source.isOf(DamageTypes.EXPLOSION)
+                || source.isOf(DamageTypes.PLAYER_EXPLOSION)
+                || source.isOf(DamageTypes.BAD_RESPAWN_POINT);
     }
 
     /** 重新登录：1 分钟内回到组别（只要组别还没解散） */
@@ -320,6 +373,7 @@ public class PvPManager {
 
     private static void tick(MinecraftServer server) {
         long now = server.getTicks();
+        ExplosionTracker.purge(now);
         for (PvPGroup group : new ArrayList<>(GROUPS.values())) {
             // 离线超时：超过 1 分钟未重连视为退出（战绩保留）
             for (Map.Entry<UUID, Long> entry : new HashMap<>(group.getOfflineSince()).entrySet()) {
