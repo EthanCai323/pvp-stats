@@ -23,7 +23,7 @@ public abstract class EndCrystalEntityMixin {
         Entity attacker = source.getAttacker();
         if (attacker instanceof ServerPlayerEntity player) {
             EndCrystalEntity crystal = (EndCrystalEntity) (Object) this;
-            ExplosionTracker.recordPrime(player.getUuid(), crystal.getPos(), world.getServer().getTicks());
+            ExplosionTracker.recordPrime(player.getUuid(), crystal.getEntityPos(), world.getServer().getTicks());
         }
     }
 }

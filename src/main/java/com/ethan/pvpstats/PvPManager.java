@@ -253,7 +253,7 @@ public class PvPManager {
         if (!(entity instanceof ServerPlayerEntity victim)) {
             return true;
         }
-        MinecraftServer server = victim.getServer();
+        MinecraftServer server = serverOf(victim);
         if (server == null) {
             return true;
         }
@@ -288,7 +288,7 @@ public class PvPManager {
             return;
         }
         PvPGroup group = GROUPS.get(groupName);
-        MinecraftServer server = victim.getServer();
+        MinecraftServer server = serverOf(victim);
         if (group == null || server == null) {
             return;
         }
@@ -329,9 +329,14 @@ public class PvPManager {
             return player.getUuid();
         }
         if (isExplosionLike(source)) {
-            return ExplosionTracker.findAttacker(server.getTicks(), entity.getPos());
+            return ExplosionTracker.findAttacker(server.getTicks(), entity.getEntityPos());
         }
         return null;
+    }
+
+    /** 1.21.11 中 Entity 不再有 getServer()，从所在世界获取 */
+    private static MinecraftServer serverOf(LivingEntity entity) {
+        return entity.getEntityWorld() instanceof ServerWorld serverWorld ? serverWorld.getServer() : null;
     }
 
     private static boolean isExplosionLike(DamageSource source) {

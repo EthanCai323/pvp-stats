@@ -3,10 +3,12 @@ package com.ethan.pvpstats.mixin;
 import com.ethan.pvpstats.ExplosionTracker;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.damage.DamageSource;
+import net.minecraft.particle.BlockParticleEffect;
 import net.minecraft.particle.ParticleEffect;
 import net.minecraft.registry.entry.RegistryEntry;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundEvent;
+import net.minecraft.util.collection.WeightedPool;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import net.minecraft.world.explosion.ExplosionBehavior;
@@ -21,12 +23,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(ServerWorld.class)
 public abstract class ServerWorldMixin {
 
-    @Inject(method = "createExplosion(Lnet/minecraft/entity/Entity;Lnet/minecraft/entity/damage/DamageSource;Lnet/minecraft/world/explosion/ExplosionBehavior;DDDFZLnet/minecraft/world/World$ExplosionSourceType;Lnet/minecraft/particle/ParticleEffect;Lnet/minecraft/particle/ParticleEffect;Lnet/minecraft/registry/entry/RegistryEntry;)V",
+    @Inject(method = "createExplosion(Lnet/minecraft/entity/Entity;Lnet/minecraft/entity/damage/DamageSource;Lnet/minecraft/world/explosion/ExplosionBehavior;DDDFZLnet/minecraft/world/World$ExplosionSourceType;Lnet/minecraft/particle/ParticleEffect;Lnet/minecraft/particle/ParticleEffect;Lnet/minecraft/util/collection/WeightedPool;Lnet/minecraft/registry/entry/RegistryEntry;)V",
             at = @At("HEAD"))
     private void pvpstats$recordExplosion(Entity entity, DamageSource damageSource, ExplosionBehavior behavior,
                                           double x, double y, double z, float power, boolean createFire,
                                           World.ExplosionSourceType explosionSourceType,
                                           ParticleEffect smallParticle, ParticleEffect largeParticle,
+                                          WeightedPool<BlockParticleEffect> blockParticles,
                                           RegistryEntry<SoundEvent> soundEvent, CallbackInfo ci) {
         ExplosionTracker.recordBlast((ServerWorld) (Object) this, entity, damageSource, new Vec3d(x, y, z));
     }
